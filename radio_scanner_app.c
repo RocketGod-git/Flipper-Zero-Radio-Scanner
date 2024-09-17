@@ -8,10 +8,10 @@
 
 #define TAG "RadioScannerApp"
 
-#define SUBGHZ_FREQUENCY_MIN 300000000
-#define SUBGHZ_FREQUENCY_MAX 928000000
+#define SUBGHZ_FREQUENCY_MIN  300000000
+#define SUBGHZ_FREQUENCY_MAX  928000000
 #define SUBGHZ_FREQUENCY_STEP 10000
-#define SUBGHZ_DEVICE_NAME "cc1101_int"
+#define SUBGHZ_DEVICE_NAME    "cc1101_int"
 
 static void radio_scanner_draw_callback(Canvas* canvas, void* context) {
     FURI_LOG_D(TAG, "Enter radio_scanner_draw_callback");
@@ -132,13 +132,29 @@ static void radio_scanner_process_scanning(RadioScannerApp* app) {
     }
 
     if(app->scanning) {
-        uint32_t new_frequency = (app->scan_direction == ScanDirectionUp)
-            ? app->frequency + SUBGHZ_FREQUENCY_STEP
-            : app->frequency - SUBGHZ_FREQUENCY_STEP;
+        uint32_t new_frequency = (app->scan_direction == ScanDirectionUp) ?
+                                     app->frequency + SUBGHZ_FREQUENCY_STEP :
+                                     app->frequency - SUBGHZ_FREQUENCY_STEP;
 
-        if(new_frequency > SUBGHZ_FREQUENCY_MAX || new_frequency < SUBGHZ_FREQUENCY_MIN) {
-            new_frequency = SUBGHZ_FREQUENCY_MIN;
-            FURI_LOG_D(TAG, "Frequency reset to minimum");
+        if(!subghz_devices_is_frequency_valid(app->radio_device, new_frequency)) {
+            if(app->scan_direction == ScanDirectionUp) {
+                if(new_frequency < 348000000) {
+                    new_frequency = 387000000;
+                } else if(new_frequency < 464000000) {
+                    new_frequency = 779000000;
+                } else {
+                    new_frequency = 300000000;
+                }
+            } else {
+                if(new_frequency > 779000000) {
+                    new_frequency = 464000000;
+                } else if(new_frequency > 387000000) {
+                    new_frequency = 348000000;
+                } else {
+                    new_frequency = 928000000;
+                }
+            }
+            FURI_LOG_D(TAG, "Adjusted frequency to next valid range: %lu", new_frequency);
         }
 
         subghz_devices_stop_async_rx(app->radio_device);
@@ -147,8 +163,8 @@ static void radio_scanner_process_scanning(RadioScannerApp* app) {
         subghz_devices_idle(app->radio_device);
         FURI_LOG_D(TAG, "Device set to idle");
 
-        subghz_devices_set_frequency(app->radio_device, new_frequency);
         app->frequency = new_frequency;
+        subghz_devices_set_frequency(app->radio_device, app->frequency);
         FURI_LOG_D(TAG, "Frequency set to %lu", app->frequency);
 
         subghz_devices_start_async_rx(app->radio_device, radio_scanner_rx_callback, app);
@@ -175,7 +191,7 @@ RadioScannerApp* radio_scanner_app_alloc() {
     app->running = true;
     app->frequency = 433920000;
     app->rssi = -100.0f;
-    app->sensitivity = -70.0f;
+    app->sensitivity = -85.0f;
     app->scanning = true;
     app->scan_direction = ScanDirectionUp;
     app->speaker_acquired = false;
