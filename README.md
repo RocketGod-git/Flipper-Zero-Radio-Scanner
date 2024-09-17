@@ -1,6 +1,6 @@
 # Flipper-Zero-Radio-Scanner
 
-## 📻
+## 📻 Description
 Scans frequencies available to the CC1101 and plays them over the speaker so you can hear them.
 Does NOT play "FM radio stations" since those frequencies are not available.
 
@@ -8,7 +8,7 @@ Does NOT play "FM radio stations" since those frequencies are not available.
 ![Screenshot1](https://github.com/user-attachments/assets/447bb455-89ae-4a16-8d3b-543a1b67016a)
 
 
-## 🤔ToDo
+## 🤔 ToDo
 - Need to hop over CC1101 frequency gaps. Currently crashes when scanning an out-of-range frequency.
 - Currently using FM238 (FuriHalSubGhzPreset2FSKDev238Async) but per CodeAllNight a custom preset can be used to improve audio.
 
