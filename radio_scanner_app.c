@@ -1,18 +1,20 @@
 #include "radio_scanner_app.h"
 #include <furi.h>
 #include <furi_hal.h>
+#include <furi_hal_gpio.h>
 #include <gui/elements.h>
-#include <furi_hal_subghz.h>
 #include <furi_hal_speaker.h>
+#include <subghz/devices/devices.h>
 
 #define TAG "RadioScannerApp"
 
 #define SUBGHZ_FREQUENCY_MIN 300000000
 #define SUBGHZ_FREQUENCY_MAX 928000000
 #define SUBGHZ_FREQUENCY_STEP 10000
+#define SUBGHZ_DEVICE_NAME "cc1101_int"
 
 static void radio_scanner_draw_callback(Canvas* canvas, void* context) {
-    FURI_LOG_D(TAG, "Entering draw callback");
+    FURI_LOG_D(TAG, "Enter radio_scanner_draw_callback");
     RadioScannerApp* app = context;
     canvas_clear(canvas);
     canvas_set_font(canvas, FontPrimary);
@@ -31,219 +33,249 @@ static void radio_scanner_draw_callback(Canvas* canvas, void* context) {
     snprintf(sensitivity_str, sizeof(sensitivity_str), "Sens: %.2f", (double)app->sensitivity);
     canvas_draw_str_aligned(canvas, 64, 42, AlignCenter, AlignTop, sensitivity_str);
 
-    canvas_draw_str_aligned(canvas, 64, 54, AlignCenter, AlignTop, app->scanning ? "Scanning..." : "Locked");
-    FURI_LOG_D(TAG, "Exiting draw callback");
+    canvas_draw_str_aligned(
+        canvas, 64, 54, AlignCenter, AlignTop, app->scanning ? "Scanning..." : "Locked");
+
+    FURI_LOG_D(TAG, "Exit radio_scanner_draw_callback");
 }
 
 static void radio_scanner_input_callback(InputEvent* input_event, void* context) {
-    FURI_LOG_D(TAG, "Entering input callback");
     furi_assert(context);
+    FURI_LOG_D(TAG, "Enter radio_scanner_input_callback");
+    FURI_LOG_D(TAG, "Input event: type=%d, key=%d", input_event->type, input_event->key);
     FuriMessageQueue* event_queue = context;
     furi_message_queue_put(event_queue, input_event, FuriWaitForever);
-    FURI_LOG_D(TAG, "Exiting input callback");
+    FURI_LOG_D(TAG, "Exit radio_scanner_input_callback");
+}
+
+static void radio_scanner_rx_callback(const void* data, size_t size, void* context) {
+    (void)data;
+    (void)context;
+
+    FURI_LOG_D(TAG, "radio_scanner_rx_callback called with size: %zu", size);
 }
 
 static void radio_scanner_update_rssi(RadioScannerApp* app) {
-    FURI_LOG_D(TAG, "Updating RSSI");
-    app->rssi = furi_hal_subghz_get_rssi();
-    FURI_LOG_D(TAG, "RSSI updated: %.2f", (double)app->rssi);
+    FURI_LOG_D(TAG, "Enter radio_scanner_update_rssi");
+    if(app->radio_device) {
+        app->rssi = subghz_devices_get_rssi(app->radio_device);
+        FURI_LOG_D(TAG, "Updated RSSI: %f", (double)app->rssi);
+    } else {
+        FURI_LOG_E(TAG, "Radio device is NULL");
+        app->rssi = -127.0f;
+    }
+    FURI_LOG_D(TAG, "Exit radio_scanner_update_rssi");
 }
 
 static bool radio_scanner_init_subghz(RadioScannerApp* app) {
-    FURI_LOG_D(TAG, "Initializing SubGhz");
-    furi_assert(app);
-    furi_hal_subghz_reset();
-    furi_hal_subghz_idle();
-    
-    if(!furi_hal_subghz_is_frequency_valid(app->frequency)) {
+    FURI_LOG_D(TAG, "Enter radio_scanner_init_subghz");
+    subghz_devices_init();
+    FURI_LOG_D(TAG, "SubGHz devices initialized");
+
+    const SubGhzDevice* device = subghz_devices_get_by_name(SUBGHZ_DEVICE_NAME);
+    if(!device) {
+        FURI_LOG_E(TAG, "Failed to get SubGhzDevice");
+        return false;
+    }
+    FURI_LOG_D(TAG, "SubGhzDevice obtained: %s", subghz_devices_get_name(device));
+
+    app->radio_device = device;
+
+    subghz_devices_begin(device);
+    FURI_LOG_D(TAG, "SubGhzDevice begun");
+
+    if(!subghz_devices_is_frequency_valid(device, app->frequency)) {
         FURI_LOG_E(TAG, "Invalid frequency: %lu", app->frequency);
         return false;
     }
-    
-    FURI_LOG_D(TAG, "Setting frequency: %lu", app->frequency);
-    furi_hal_subghz_set_frequency(app->frequency);
-    FURI_LOG_D(TAG, "Frequency set");
-    furi_hal_subghz_rx();
-    FURI_LOG_D(TAG, "SubGhz set to RX mode");
-    
-    FURI_LOG_D(TAG, "SubGhz initialization complete");
+    FURI_LOG_D(TAG, "Frequency is valid: %lu", app->frequency);
+
+    subghz_devices_load_preset(device, FuriHalSubGhzPreset2FSKDev238Async, NULL);
+    FURI_LOG_D(TAG, "Preset loaded");
+
+    subghz_devices_set_frequency(device, app->frequency);
+    FURI_LOG_D(TAG, "Frequency set to %lu", app->frequency);
+
+    subghz_devices_start_async_rx(device, radio_scanner_rx_callback, app);
+    FURI_LOG_D(TAG, "Asynchronous RX started");
+
+    if(furi_hal_speaker_acquire(30)) {
+        app->speaker_acquired = true;
+        subghz_devices_set_async_mirror_pin(device, &gpio_speaker);
+        FURI_LOG_D(TAG, "Speaker acquired and async mirror pin set");
+    } else {
+        app->speaker_acquired = false;
+        FURI_LOG_E(TAG, "Failed to acquire speaker");
+    }
+
+    FURI_LOG_D(TAG, "Exit radio_scanner_init_subghz");
     return true;
 }
 
-static void subghz_txrx_rx(RadioScannerApp* app) {
-    FURI_LOG_D(TAG, "Entering RX mode");
-
-    furi_hal_subghz_idle();
-    furi_hal_subghz_set_frequency(app->frequency);
-    furi_hal_subghz_rx();
-}
-
-static void subghz_txrx_rx_end(void) {
-    FURI_LOG_D(TAG, "Ending RX mode");
-
-    furi_hal_subghz_idle();
-}
-
-static bool speaker_on(RadioScannerApp* app) {
-    FURI_LOG_D(TAG, "Turning on speaker");
-    int retry_count = 0;
-    const int max_retries = 5;
-
-    while(retry_count < max_retries) {
-        if(furi_hal_speaker_acquire(30)) {
-            FURI_LOG_D(TAG, "Speaker acquired");
-            if(app->radio_device) {
-                subghz_devices_set_async_mirror_pin(app->radio_device, &gpio_speaker);
-                FURI_LOG_D(TAG, "Speaker on");
-                return true;
-            } else {
-                FURI_LOG_E(TAG, "Radio device is NULL, cannot set async mirror pin");
-            }
-        } else {
-            FURI_LOG_W(TAG, "Failed to acquire speaker, retrying");
-            retry_count++;
-            furi_delay_ms(100);
-        }
-    }
-
-    FURI_LOG_E(TAG, "Failed to acquire speaker after maximum retries");
-    return false;
-}
-
-static void speaker_off(RadioScannerApp* app) {
-    FURI_LOG_D(TAG, "Turning off speaker");
-    if(furi_hal_speaker_is_mine()) {
-        if(app->radio_device) {
-            subghz_devices_set_async_mirror_pin(app->radio_device, NULL);
-            FURI_LOG_D(TAG, "Stopped routing RF signal to speaker");
-        }
-        furi_hal_speaker_release();
-        FURI_LOG_D(TAG, "Speaker off");
-    }
-}
-
 static void radio_scanner_process_scanning(RadioScannerApp* app) {
-    FURI_LOG_D(TAG, "Processing scanning");
+    FURI_LOG_D(TAG, "Enter radio_scanner_process_scanning");
     radio_scanner_update_rssi(app);
-
+    FURI_LOG_D(TAG, "RSSI after update: %f", (double)app->rssi);
     bool signal_detected = (app->rssi > app->sensitivity);
-    
+    FURI_LOG_D(TAG, "Signal detected: %d", signal_detected);
+
     if(signal_detected) {
-        FURI_LOG_I(TAG, "Signal detected above sensitivity threshold");
         if(app->scanning) {
-            FURI_LOG_D(TAG, "Locking frequency due to signal detection");
-            speaker_on(app);  
-            app->scanning = false;  
+            app->scanning = false;
+            FURI_LOG_D(TAG, "Scanning stopped");
         }
     } else {
-        FURI_LOG_D(TAG, "No signal detected, continue scanning");
-        app->scanning = true;  
+        if(!app->scanning) {
+            app->scanning = true;
+            FURI_LOG_D(TAG, "Scanning started");
+        }
     }
 
     if(app->scanning) {
-        uint32_t new_frequency;
-        if(app->scan_direction == ScanDirectionUp) {
-            new_frequency = app->frequency + SUBGHZ_FREQUENCY_STEP;
-        } else {
-            new_frequency = app->frequency - SUBGHZ_FREQUENCY_STEP;
-        }
-
-        FURI_LOG_D(TAG, "Calculated new frequency: %lu", new_frequency);
+        uint32_t new_frequency = (app->scan_direction == ScanDirectionUp)
+            ? app->frequency + SUBGHZ_FREQUENCY_STEP
+            : app->frequency - SUBGHZ_FREQUENCY_STEP;
 
         if(new_frequency > SUBGHZ_FREQUENCY_MAX || new_frequency < SUBGHZ_FREQUENCY_MIN) {
             new_frequency = SUBGHZ_FREQUENCY_MIN;
-            FURI_LOG_D(TAG, "Frequency reset to minimum: %lu", new_frequency);
+            FURI_LOG_D(TAG, "Frequency reset to minimum");
         }
 
-        if(furi_hal_subghz_is_frequency_valid(new_frequency)) {
-            FURI_LOG_D(TAG, "Setting new frequency: %lu", new_frequency);
-            subghz_txrx_rx_end();  
-            app->frequency = new_frequency;
-            subghz_txrx_rx(app); 
-        } else {
-            FURI_LOG_W(TAG, "Invalid frequency: %lu, skipping", new_frequency);
-            app->frequency = SUBGHZ_FREQUENCY_MIN;
-        }
+        subghz_devices_stop_async_rx(app->radio_device);
+        FURI_LOG_D(TAG, "Asynchronous RX stopped");
+
+        subghz_devices_idle(app->radio_device);
+        FURI_LOG_D(TAG, "Device set to idle");
+
+        subghz_devices_set_frequency(app->radio_device, new_frequency);
+        app->frequency = new_frequency;
+        FURI_LOG_D(TAG, "Frequency set to %lu", app->frequency);
+
+        subghz_devices_start_async_rx(app->radio_device, radio_scanner_rx_callback, app);
+        FURI_LOG_D(TAG, "Asynchronous RX restarted");
     }
-
-    FURI_LOG_D(TAG, "Scanning process complete");
+    FURI_LOG_D(TAG, "Exit radio_scanner_process_scanning");
 }
 
 RadioScannerApp* radio_scanner_app_alloc() {
-    FURI_LOG_D(TAG, "Allocating RadioScannerApp");
+    FURI_LOG_D(TAG, "Enter radio_scanner_app_alloc");
     RadioScannerApp* app = malloc(sizeof(RadioScannerApp));
+    if(!app) {
+        FURI_LOG_E(TAG, "Failed to allocate RadioScannerApp");
+        return NULL;
+    }
+    FURI_LOG_D(TAG, "RadioScannerApp allocated");
+
     app->view_port = view_port_alloc();
+    FURI_LOG_D(TAG, "ViewPort allocated");
+
     app->event_queue = furi_message_queue_alloc(8, sizeof(InputEvent));
-    app->radio_device = NULL;
+    FURI_LOG_D(TAG, "Event queue allocated");
+
     app->running = true;
     app->frequency = 433920000;
     app->rssi = -100.0f;
-    app->sensitivity = -105.0f;
+    app->sensitivity = -70.0f;
     app->scanning = true;
     app->scan_direction = ScanDirectionUp;
+    app->speaker_acquired = false;
+    app->radio_device = NULL;
+
     view_port_draw_callback_set(app->view_port, radio_scanner_draw_callback, app);
+    FURI_LOG_D(TAG, "Draw callback set");
+
     view_port_input_callback_set(app->view_port, radio_scanner_input_callback, app->event_queue);
-    FURI_LOG_D(TAG, "RadioScannerApp allocated");
+    FURI_LOG_D(TAG, "Input callback set");
+
+    FURI_LOG_D(TAG, "Exit radio_scanner_app_alloc");
     return app;
 }
 
 void radio_scanner_app_free(RadioScannerApp* app) {
-    FURI_LOG_D(TAG, "Freeing RadioScannerApp");
-    furi_assert(app);
+    FURI_LOG_D(TAG, "Enter radio_scanner_app_free");
+    if(app->speaker_acquired && furi_hal_speaker_is_mine()) {
+        subghz_devices_set_async_mirror_pin(app->radio_device, NULL);
+        furi_hal_speaker_release();
+        app->speaker_acquired = false;
+        FURI_LOG_D(TAG, "Speaker released");
+    }
+
+    if(app->radio_device) {
+        subghz_devices_stop_async_rx(app->radio_device);
+        FURI_LOG_D(TAG, "Asynchronous RX stopped");
+        subghz_devices_end(app->radio_device);
+        FURI_LOG_D(TAG, "SubGhzDevice stopped and ended");
+    }
+
+    subghz_devices_deinit();
+    FURI_LOG_D(TAG, "SubGHz devices deinitialized");
+
     view_port_free(app->view_port);
+    FURI_LOG_D(TAG, "ViewPort freed");
+
     furi_message_queue_free(app->event_queue);
+    FURI_LOG_D(TAG, "Event queue freed");
+
     free(app);
-    FURI_LOG_D(TAG, "RadioScannerApp freed");
+    FURI_LOG_D(TAG, "RadioScannerApp memory freed");
 }
 
 int32_t radio_scanner_app(void* p) {
     UNUSED(p);
-    FURI_LOG_D(TAG, "Starting RadioScannerApp");
+    FURI_LOG_D(TAG, "Enter radio_scanner_app");
+
     RadioScannerApp* app = radio_scanner_app_alloc();
+    if(!app) {
+        FURI_LOG_E(TAG, "Failed to allocate app");
+        return -1;
+    }
 
-    FURI_LOG_D(TAG, "Opening GUI");
     Gui* gui = furi_record_open(RECORD_GUI);
-    gui_add_view_port(gui, app->view_port, GuiLayerFullscreen);
+    FURI_LOG_D(TAG, "GUI record opened");
 
-    FURI_LOG_D(TAG, "Initializing SubGhz");
+    gui_add_view_port(gui, app->view_port, GuiLayerFullscreen);
+    FURI_LOG_D(TAG, "ViewPort added to GUI");
+
     if(!radio_scanner_init_subghz(app)) {
-        FURI_LOG_E(TAG, "Failed to initialize SubGhz");
+        FURI_LOG_E(TAG, "Failed to initialize SubGHz");
         radio_scanner_app_free(app);
         return 255;
     }
+    FURI_LOG_D(TAG, "SubGHz initialized successfully");
 
-    FURI_LOG_D(TAG, "Entering main loop");
     InputEvent event;
     while(app->running) {
+        FURI_LOG_D(TAG, "Main loop iteration");
         if(app->scanning) {
+            FURI_LOG_D(TAG, "Scanning is active");
             radio_scanner_process_scanning(app);
         } else {
+            FURI_LOG_D(TAG, "Scanning is inactive, updating RSSI");
             radio_scanner_update_rssi(app);
         }
 
+        FURI_LOG_D(TAG, "Checking for input events");
         if(furi_message_queue_get(app->event_queue, &event, 10) == FuriStatusOk) {
-            FURI_LOG_D(TAG, "Input event received: %d", event.key);
+            FURI_LOG_D(TAG, "Input event received: type=%d, key=%d", event.type, event.key);
             if(event.type == InputTypeShort) {
                 if(event.key == InputKeyOk) {
-                    FURI_LOG_D(TAG, "OK button pressed");
                     app->scanning = !app->scanning;
+                    FURI_LOG_D(TAG, "Toggled scanning: %d", app->scanning);
                 } else if(event.key == InputKeyUp) {
-                    FURI_LOG_D(TAG, "Up button pressed, increasing sensitivity");
-                    app->sensitivity += 5.0f;
-                    FURI_LOG_D(TAG, "New sensitivity: %.2f", (double)app->sensitivity);
+                    app->sensitivity += 1.0f;
+                    FURI_LOG_D(TAG, "Increased sensitivity: %f", (double)app->sensitivity);
                 } else if(event.key == InputKeyDown) {
-                    FURI_LOG_D(TAG, "Down button pressed, decreasing sensitivity");
-                    app->sensitivity -= 5.0f;
-                    FURI_LOG_D(TAG, "New sensitivity: %.2f", (double)app->sensitivity);
+                    app->sensitivity -= 1.0f;
+                    FURI_LOG_D(TAG, "Decreased sensitivity: %f", (double)app->sensitivity);
                 } else if(event.key == InputKeyLeft) {
-                    FURI_LOG_D(TAG, "Left button pressed, changing scan direction to down");
                     app->scan_direction = ScanDirectionDown;
+                    FURI_LOG_D(TAG, "Scan direction set to down");
                 } else if(event.key == InputKeyRight) {
-                    FURI_LOG_D(TAG, "Right button pressed, changing scan direction to up");
                     app->scan_direction = ScanDirectionUp;
+                    FURI_LOG_D(TAG, "Scan direction set to up");
                 } else if(event.key == InputKeyBack) {
-                    FURI_LOG_D(TAG, "Back button pressed, exiting app");
                     app->running = false;
+                    FURI_LOG_D(TAG, "Exiting app");
                 }
             }
         }
@@ -252,17 +284,20 @@ int32_t radio_scanner_app(void* p) {
         furi_delay_ms(10);
     }
 
-    FURI_LOG_D(TAG, "Exiting main loop");
-    furi_hal_subghz_idle();
-    furi_hal_subghz_sleep();
-    speaker_off(app);
+    if(app->speaker_acquired && furi_hal_speaker_is_mine()) {
+        subghz_devices_set_async_mirror_pin(app->radio_device, NULL);
+        furi_hal_speaker_release();
+        app->speaker_acquired = false;
+        FURI_LOG_D(TAG, "Speaker released at app exit");
+    }
 
-    FURI_LOG_D(TAG, "Removing view port");
     gui_remove_view_port(gui, app->view_port);
-    furi_record_close(RECORD_GUI);
+    FURI_LOG_D(TAG, "ViewPort removed from GUI");
 
-    FURI_LOG_D(TAG, "Freeing app resources");
+    furi_record_close(RECORD_GUI);
+    FURI_LOG_D(TAG, "GUI record closed");
+
     radio_scanner_app_free(app);
-    FURI_LOG_I(TAG, "RadioScannerApp finished");
+    FURI_LOG_D(TAG, "Exit radio_scanner_app");
     return 0;
 }
