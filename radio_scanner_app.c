@@ -138,19 +138,19 @@ static void radio_scanner_process_scanning(RadioScannerApp* app) {
 
         if(!subghz_devices_is_frequency_valid(app->radio_device, new_frequency)) {
             if(app->scan_direction == ScanDirectionUp) {
-                if(new_frequency < 348000000) {
+                if(new_frequency < 387000000) {
                     new_frequency = 387000000;
-                } else if(new_frequency < 464000000) {
+                } else if(new_frequency < 779000000) {
                     new_frequency = 779000000;
-                } else {
+                } else if(new_frequency > 928000000) {
                     new_frequency = 300000000;
                 }
             } else {
-                if(new_frequency > 779000000) {
+                if(new_frequency > 464000000) {
                     new_frequency = 464000000;
-                } else if(new_frequency > 387000000) {
+                } else if(new_frequency > 348000000) {
                     new_frequency = 348000000;
-                } else {
+                } else if(new_frequency < 300000000) {
                     new_frequency = 928000000;
                 }
             }
