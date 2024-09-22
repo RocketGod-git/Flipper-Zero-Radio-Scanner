@@ -65,6 +65,8 @@ static void radio_scanner_rx_callback(const void* data, size_t size, void* conte
     UNUSED(context);
 #ifdef FURI_DEBUG
     FURI_LOG_D(TAG, "radio_scanner_rx_callback called with size: %zu", size);
+#else
+    UNUSED(size);
 #endif
 }
 
