@@ -43,7 +43,10 @@ static void radio_scanner_draw_callback(Canvas* canvas, void* context) {
     canvas_draw_str_aligned(canvas, 64, 42, AlignCenter, AlignTop, sensitivity_str);
 
     canvas_draw_str_aligned(
-        canvas, 64, 54, AlignCenter, AlignTop, app->scanning ? "Scanning..." : "Locked");
+        canvas, 44, 54, AlignRight, AlignTop, app->scanning ? "Scanning..." : "Locked");
+
+    canvas_draw_str_aligned(
+        canvas, 84, 54, AlignLeft, AlignTop, app->speaker_acquired ? "Sound ON" : "Sound OFF");
 #ifdef FURI_DEBUG
     FURI_LOG_D(TAG, "Exit radio_scanner_draw_callback");
 #endif
@@ -409,6 +412,28 @@ int32_t radio_scanner_app(void* p) {
                 } else if(event.key == InputKeyBack) {
                     app->running = false;
                     FURI_LOG_I(TAG, "Exiting app");
+                }
+            } else if(event.type == InputTypeLong) {
+                if(event.key == InputKeyUp) {
+                    // Toggle speaker mute on long press of up button
+                    if(app->speaker_acquired && furi_hal_speaker_is_mine()) {
+                        subghz_devices_set_async_mirror_pin(app->radio_device, NULL);
+                        furi_hal_speaker_release();
+#ifdef FURI_DEBUG
+                        FURI_LOG_D(TAG, "Speaker released");
+#endif
+                    } else {
+                        if(furi_hal_speaker_acquire(30)) {
+                            subghz_devices_set_async_mirror_pin(app->radio_device, &gpio_speaker);
+#ifdef FURI_DEBUG
+                            FURI_LOG_D(TAG, "Speaker acquired and async mirror pin set");
+#endif
+                        } else {
+                            FURI_LOG_E(TAG, "Failed to acquire speaker");
+                        }
+                    }
+                    app->speaker_acquired = !app->speaker_acquired;
+                    FURI_LOG_I(TAG, "Toggled speaker mute: %d", app->speaker_acquired);
                 }
             }
         }
