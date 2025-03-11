@@ -43,7 +43,10 @@ static void radio_scanner_draw_callback(Canvas* canvas, void* context) {
     canvas_draw_str_aligned(canvas, 64, 42, AlignCenter, AlignTop, sensitivity_str);
 
     canvas_draw_str_aligned(
-        canvas, 64, 54, AlignCenter, AlignTop, app->scanning ? "Scanning..." : "Locked");
+        canvas, 44, 54, AlignRight, AlignTop, app->scanning ? "Scanning..." : "Locked");
+
+    canvas_draw_str_aligned(
+        canvas, 82, 54, AlignLeft, AlignTop, app->sound_on ? "Sound ON" : "Sound OFF");
 #ifdef FURI_DEBUG
     FURI_LOG_D(TAG, "Exit radio_scanner_draw_callback");
 #endif
@@ -265,6 +268,7 @@ RadioScannerApp* radio_scanner_app_alloc() {
     app->scan_direction = ScanDirectionUp;
     app->speaker_acquired = false;
     app->radio_device = NULL;
+    app->sound_on = true;
 
     view_port_draw_callback_set(app->view_port, radio_scanner_draw_callback, app);
 #ifdef FURI_DEBUG
@@ -409,6 +413,24 @@ int32_t radio_scanner_app(void* p) {
                 } else if(event.key == InputKeyBack) {
                     app->running = false;
                     FURI_LOG_I(TAG, "Exiting app");
+                }
+            } else if(event.type == InputTypeLong) {
+                if(event.key == InputKeyUp) {
+                    // Toggle speaker mute on long press of up button
+                    if(app->sound_on) {
+                        subghz_devices_set_async_mirror_pin(app->radio_device, NULL);
+                        app->sound_on = false;
+#ifdef FURI_DEBUG
+                        FURI_LOG_D(TAG, "Speaker muted");
+#endif
+                    } else {
+                        subghz_devices_set_async_mirror_pin(app->radio_device, &gpio_speaker);
+                        app->sound_on = true;
+#ifdef FURI_DEBUG
+                        FURI_LOG_D(TAG, "Speaker activated");
+#endif
+                    }
+                    FURI_LOG_I(TAG, "Toggled speaker mute: %d", app->sound_on);
                 }
             }
         }
